@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -89,14 +91,19 @@ func parseThumbnailReq(w http.ResponseWriter, r *http.Request) (string, multipar
 		return "", nil, err
 	}
 
-	contentType := strings.Split(header.Header.Get("Content-Type"), "/")
-	mediaType := contentType[1]
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		err = errors.New("Invalid media type")
+		respondWithError(w, http.StatusBadRequest, "Thumbnail media type must be either image/jpeg or image/png", err)
+		return "", nil, err
+	}
 
 	return mediaType, multipartFile, nil
 }
 
 func (cfg *apiConfig) updateThumbnail(videoID uuid.UUID, multipartFile multipart.File, mediaType string, metadata database.Video) error {
-	fileName := videoID.String() + "." + mediaType
+	fileExt := strings.Split(mediaType, "/")[1]
+	fileName := videoID.String() + "." + fileExt
 	thumbnailFilePath := filepath.Join(cfg.assetsRoot, fileName)
 
 	file, err := os.Create(thumbnailFilePath)
