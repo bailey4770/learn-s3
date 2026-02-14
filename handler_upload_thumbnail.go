@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log"
@@ -46,7 +48,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	log.Println("Info: image metdata retrieved from db and user ID verified")
 
-	if err := cfg.updateThumbnail(videoID, multipartFile, mediaType, metadata); err != nil {
+	if err := cfg.updateThumbnail(multipartFile, mediaType, metadata); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update thumbnail", err)
 		log.Println("Error: could not update thumbnail:", err)
 		return
@@ -101,9 +103,15 @@ func parseThumbnailReq(w http.ResponseWriter, r *http.Request) (string, multipar
 	return mediaType, multipartFile, nil
 }
 
-func (cfg *apiConfig) updateThumbnail(videoID uuid.UUID, multipartFile multipart.File, mediaType string, metadata database.Video) error {
+func (cfg *apiConfig) updateThumbnail(multipartFile multipart.File, mediaType string, metadata database.Video) error {
+	randBytes := make([]byte, 32)
+	if _, err := rand.Read(randBytes); err != nil {
+		return err
+	}
+	randEncoded := base64.RawURLEncoding.EncodeToString(randBytes)
+
 	fileExt := strings.Split(mediaType, "/")[1]
-	fileName := videoID.String() + "." + fileExt
+	fileName := randEncoded + "." + fileExt
 	thumbnailFilePath := filepath.Join(cfg.assetsRoot, fileName)
 
 	file, err := os.Create(thumbnailFilePath)
