@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -13,50 +14,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
 const (
-	MiB       = 1 << 20
-	maxMemory = 10 * MiB
+	GiB = 1 << 30
+	MiB = 1 << 20
 )
-
-func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
-	videoID, userID, err := validateRequest(cfg, w, r)
-	if err != nil {
-		log.Println("Error: could not validate request:", err)
-		return
-	}
-
-	log.Println("uploading thumbnail for video", videoID, "by user", userID)
-
-	mediaType, multipartFile, err := parseThumbnailReq(w, r)
-	if err != nil {
-		log.Println("Error: could not parse request:", err)
-		return
-	}
-
-	metadata, err := cfg.db.GetVideo(videoID)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't find image metdata in db", err)
-		return
-	} else if metadata.UserID != userID {
-		http.Error(w, "User ID from request does not match video owner ID", http.StatusUnauthorized)
-		return
-	}
-	log.Println("Info: image metdata retrieved from db and user ID verified")
-
-	if err := cfg.updateThumbnail(multipartFile, mediaType, metadata); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't update thumbnail", err)
-		log.Println("Error: could not update thumbnail:", err)
-		return
-	}
-
-	log.Println("Info: thumbnail successfully set")
-	respondWithJSON(w, http.StatusOK, metadata)
-}
 
 func validateRequest(cfg *apiConfig, w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, error) {
 	videoIDString := r.PathValue("videoID")
@@ -81,26 +48,50 @@ func validateRequest(cfg *apiConfig, w http.ResponseWriter, r *http.Request) (uu
 	return videoID, userID, nil
 }
 
-func parseThumbnailReq(w http.ResponseWriter, r *http.Request) (string, multipart.File, error) {
+func parseUploadReq(w http.ResponseWriter, r *http.Request, key string) (string, multipart.File, error) {
+	validMediaTypes := make(map[string]struct{})
+	switch key {
+	case "thumbnail":
+		validMediaTypes["image/png"] = struct{}{}
+		validMediaTypes["image/jpeg"] = struct{}{}
+	case "video":
+		validMediaTypes["video/mp4"] = struct{}{}
+	default:
+		panic("Invalid key for Content-Type header")
+	}
+
+	const maxMemory = 10 * MiB
 	if err := r.ParseMultipartForm(maxMemory); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Couldn't parse multipart form", err)
 		return "", nil, err
 	}
 
-	multipartFile, header, err := r.FormFile("thumbnail")
+	multipartFile, header, err := r.FormFile(key)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't form file the request", err)
 		return "", nil, err
 	}
 
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
-	if mediaType != "image/jpeg" && mediaType != "image/png" {
+	if _, ok := validMediaTypes[mediaType]; !ok {
 		err = errors.New("Invalid media type")
 		respondWithError(w, http.StatusBadRequest, "Thumbnail media type must be either image/jpeg or image/png", err)
 		return "", nil, err
 	}
 
 	return mediaType, multipartFile, nil
+}
+
+func getVideoMetadata(cfg *apiConfig, w http.ResponseWriter, videoID, userID uuid.UUID) (database.Video, error) {
+	metadata, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find image metdata in db", err)
+	} else if metadata.UserID != userID {
+		err = errors.New("User ID from request does not match video owner ID")
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+	}
+
+	return metadata, err
 }
 
 func (cfg *apiConfig) updateThumbnail(multipartFile multipart.File, mediaType string, metadata database.Video) error {
@@ -128,5 +119,28 @@ func (cfg *apiConfig) updateThumbnail(multipartFile multipart.File, mediaType st
 	cfg.db.UpdateVideo(metadata)
 
 	log.Println("Info: thumbnail URL updated in db")
+	return nil
+}
+
+func (cfg *apiConfig) updateVideo(tempFile *os.File, mediaType string, metadata database.Video) error {
+	randBytes := make([]byte, 32)
+	if _, err := rand.Read(randBytes); err != nil {
+		return err
+	}
+	s3Key := base64.RawURLEncoding.EncodeToString(randBytes) + ".ext"
+
+	if _, err := cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      &cfg.s3Bucket,
+		Key:         &s3Key,
+		Body:        tempFile,
+		ContentType: &mediaType,
+	}); err != nil {
+		return err
+	}
+
+	videoURL := "https://" + cfg.s3Bucket + ".s3." + cfg.s3Region + ".amazonaws.com/" + s3Key
+	metadata.VideoURL = &videoURL
+	cfg.db.UpdateVideo(metadata)
+
 	return nil
 }
