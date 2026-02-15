@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -122,12 +126,12 @@ func (cfg *apiConfig) updateThumbnail(multipartFile multipart.File, mediaType st
 	return nil
 }
 
-func (cfg *apiConfig) updateVideo(tempFile *os.File, mediaType string, metadata database.Video) error {
+func (cfg *apiConfig) updateVideo(tempFile *os.File, orientation, mediaType string, metadata database.Video) error {
 	randBytes := make([]byte, 32)
 	if _, err := rand.Read(randBytes); err != nil {
 		return err
 	}
-	s3Key := base64.RawURLEncoding.EncodeToString(randBytes) + ".ext"
+	s3Key := orientation + "/" + base64.RawURLEncoding.EncodeToString(randBytes) + ".ext"
 
 	if _, err := cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
@@ -142,5 +146,46 @@ func (cfg *apiConfig) updateVideo(tempFile *os.File, mediaType string, metadata 
 	metadata.VideoURL = &videoURL
 	cfg.db.UpdateVideo(metadata)
 
+	log.Println("Info: video", videoURL, "uploaded to s3Bucket and metadata stored in db")
+
 	return nil
+}
+
+type ffprobeOutput struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	} `json:"streams"`
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	var videoDimensions ffprobeOutput
+	if err := json.Unmarshal(output.Bytes(), &videoDimensions); err != nil {
+		return "", err
+	}
+
+	width := videoDimensions.Streams[0].Width
+	height := videoDimensions.Streams[0].Height
+	ratio := float64(width) / float64(height)
+	log.Println("Aspect ratio found", ratio)
+
+	const tolerance = 0.02 // 2% tolerance
+
+	switch {
+	case math.Abs(ratio-16.0/9.0) < tolerance: // ~1.778
+		return "16:9", nil
+	case math.Abs(ratio-9.0/16.0) < tolerance: // ~0.5625
+		return "9:16", nil
+	default:
+		return "other", nil
+	}
 }

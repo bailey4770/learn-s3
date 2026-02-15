@@ -352,8 +352,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
 		return
 	}
+	log.Println("Info: video data copied to local temp file")
 
-	if err := cfg.updateVideo(tempFile, mediaType, metadata); err != nil {
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
+		return
+	}
+
+	var orientation string
+	switch aspectRatio {
+	case "16:9":
+		orientation = "landscape"
+	case "9:16":
+		orientation = "portrait"
+	default:
+		orientation = "other"
+	}
+
+	if err := cfg.updateVideo(tempFile, orientation, mediaType, metadata); err != nil {
 		log.Println("Error: could not update video", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
 		return
