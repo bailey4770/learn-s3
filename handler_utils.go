@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -142,7 +144,8 @@ func (cfg *apiConfig) updateVideo(tempFile *os.File, orientation, mediaType stri
 		return err
 	}
 
-	videoURL := "https://" + cfg.s3Bucket + ".s3." + cfg.s3Region + ".amazonaws.com/" + s3Key
+	// for priv bucket, store CS bucket and s3Key for dynamic signed URL generation
+	videoURL := cfg.s3Bucket + "," + s3Key
 	metadata.VideoURL = &videoURL
 	cfg.db.UpdateVideo(metadata)
 
@@ -226,4 +229,44 @@ func processVideoForFastStart(filePath string) (string, error) {
 
 	log.Println("Info: video processed for fast start")
 	return outputFilePath, nil
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	presignClient := s3.NewPresignClient(s3Client)
+
+	presignedHTTPRequest, err := presignClient.PresignGetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		log.Println("Error: could not generated presigned HTTP Request:", err)
+		return "", err
+	}
+
+	return presignedHTTPRequest.URL, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	// newly created videos have no URL. File must be uploaded first
+	if video.VideoURL == nil {
+		return video, nil
+	}
+
+	parts := strings.Split(*video.VideoURL, ",")
+	if len(parts) != 2 {
+		err := fmt.Errorf("video URL in databse should be format <bucket>,<key> but found:", parts)
+		log.Println("Error:", err)
+		return video, err
+	}
+
+	bucket, key := parts[0], parts[1]
+
+	presignedURL, err := generatePresignedURL(cfg.s3Client, bucket, key, time.Second)
+	if err != nil {
+		log.Println("Error:", err)
+		return video, err
+	}
+
+	video.VideoURL = &presignedURL
+	return video, nil
 }
