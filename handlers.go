@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -333,44 +332,38 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	log.Println("Info: video metdata retrieved from db and user ID verified")
 
-	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	tempFile, err := copyDataToFile(multipartFile)
 	if err != nil {
-		log.Println("Error:", err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
 		return
 	}
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	if _, err := io.Copy(tempFile, multipartFile); err != nil {
-		log.Println("Error: could not copy multipart to temp:", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
-		return
-	}
-
-	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
-		log.Println("Error: could not seek to temp file start:", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
-		return
-	}
-	log.Println("Info: video data copied to local temp file")
-
-	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	orientation, err := getVideoAspectRatio(tempFile.Name())
 	if err != nil {
+		log.Println("Error: could not get orientation:", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
 		return
 	}
 
-	var orientation string
-	switch aspectRatio {
-	case "16:9":
-		orientation = "landscape"
-	case "9:16":
-		orientation = "portrait"
-	default:
-		orientation = "other"
+	processedFilePath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		log.Println("Error: could not process file to fast start:", err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
+		return
 	}
 
-	if err := cfg.updateVideo(tempFile, orientation, mediaType, metadata); err != nil {
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		log.Println("Error: could not open processedFilePath :", err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
+		return
+	}
+	defer os.Remove(processedFile.Name())
+	defer processedFile.Close()
+
+	if err := cfg.updateVideo(processedFile, orientation, mediaType, metadata); err != nil {
 		log.Println("Error: could not update video", err)
 		respondWithError(w, http.StatusInternalServerError, "Failed to process upload", err)
 		return

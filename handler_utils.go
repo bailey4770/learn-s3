@@ -165,11 +165,13 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	cmd.Stdout = &output
 
 	if err := cmd.Run(); err != nil {
+		log.Println("Error: cmd failed to run:", err)
 		return "", err
 	}
 
 	var videoDimensions ffprobeOutput
 	if err := json.Unmarshal(output.Bytes(), &videoDimensions); err != nil {
+		log.Println("Error: could not marhsal data:", err)
 		return "", err
 	}
 
@@ -182,10 +184,46 @@ func getVideoAspectRatio(filePath string) (string, error) {
 
 	switch {
 	case math.Abs(ratio-16.0/9.0) < tolerance: // ~1.778
-		return "16:9", nil
+		return "landscape", nil
 	case math.Abs(ratio-9.0/16.0) < tolerance: // ~0.5625
-		return "9:16", nil
+		return "portrait", nil
 	default:
 		return "other", nil
 	}
+}
+
+func copyDataToFile(multipartFile multipart.File) (*os.File, error) {
+	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	if err != nil {
+		log.Println("Error:", err)
+		return nil, err
+	}
+
+	if _, err := io.Copy(tempFile, multipartFile); err != nil {
+		log.Println("Error: could not copy multipart to temp:", err)
+		return nil, err
+	}
+
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		log.Println("Error: could not seek to temp file start:", err)
+		return nil, err
+	}
+	log.Println("Info: video data copied to local temp file")
+
+	return tempFile, nil
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFilePath := filePath + ".processing"
+
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilePath)
+	log.Println("Info: cmd created:", cmd)
+
+	if err := cmd.Run(); err != nil {
+		log.Println("Error: cmd failed to run:", err)
+		return "", err
+	}
+
+	log.Println("Info: video processed for fast start")
+	return outputFilePath, nil
 }
