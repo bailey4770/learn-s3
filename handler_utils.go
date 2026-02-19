@@ -142,7 +142,7 @@ func (cfg *apiConfig) updateVideo(tempFile *os.File, orientation, mediaType stri
 		return err
 	}
 
-	videoURL := "https://" + cfg.s3Bucket + ".s3." + cfg.s3Region + ".amazonaws.com/" + s3Key
+	videoURL := "https://" + cfg.s3CfDistribution + "/" + s3Key
 	metadata.VideoURL = &videoURL
 	cfg.db.UpdateVideo(metadata)
 
