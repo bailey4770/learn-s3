@@ -1,7 +1,9 @@
 # Learn Serverless Storage with S3 and CDNs with CloudFront
 
 This project is a fork of a basic video uploading website, with the majority of
-code coming from [boot.dev](boot.dev). My additions mostly concern the HTTP handler
+code coming from [boot.dev](boot.dev).
+
+My additions mostly concern the HTTP handler
 funcs, to allow user uploaded videos to be stored in an AWS S3 Bucket and available
 worldwide through the CloudFront CDN, using the AWS SDK in Golang. I also worked
 in the AWS Console to set up my own S3 buckets and CloudFront CDN. However, these
